@@ -1,0 +1,113 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+    margin: 0;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background-color: #070a10;
+    color: #e7ebf2;
+}
+
+code, .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.font-display {
+    font-family: 'Space Grotesk', sans-serif;
+}
+
+@layer base {
+  :root {
+        --background: 216 40% 4%;
+        --foreground: 216 20% 92%;
+        --card: 218 32% 8%;
+        --card-foreground: 216 20% 92%;
+        --popover: 218 32% 8%;
+        --popover-foreground: 216 20% 92%;
+        --primary: 221 83% 53%;
+        --primary-foreground: 0 0% 100%;
+        --secondary: 217 27% 14%;
+        --secondary-foreground: 216 20% 92%;
+        --muted: 217 27% 14%;
+        --muted-foreground: 216 12% 58%;
+        --accent: 217 27% 16%;
+        --accent-foreground: 216 20% 92%;
+        --destructive: 0 72% 51%;
+        --destructive-foreground: 0 0% 100%;
+        --border: 217 27% 15%;
+        --input: 217 27% 15%;
+        --ring: 221 83% 53%;
+        --radius: 0.75rem;
+    }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    }
+  body {
+    @apply bg-background text-foreground;
+    }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #0a0e15; }
+::-webkit-scrollbar-thumb { background: #1e2733; border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: #2a3543; }
+
+.label-mono {
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-size: 0.68rem;
+    color: #6b7688;
+}
+
+.app-bg {
+    background:
+      radial-gradient(1200px 500px at 20% -10%, rgba(37,99,235,0.10), transparent 60%),
+      radial-gradient(900px 400px at 90% 0%, rgba(37,99,235,0.06), transparent 55%),
+      #070a10;
+    min-height: 100vh;
+}
+
+.card-surface {
+    background: linear-gradient(180deg, rgba(20,26,37,0.9), rgba(14,19,28,0.9));
+    border: 1px solid rgba(46,58,76,0.6);
+    border-radius: 1rem;
+}
+
+.nav-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.7rem;
+    border-radius: 0.6rem;
+    font-size: 0.85rem;
+    color: #97a2b4;
+    transition: color .18s ease, background-color .18s ease;
+    white-space: nowrap;
+}
+.nav-link:hover { color: #e7ebf2; background: rgba(37,99,235,0.08); }
+.nav-link.active { color: #60a5fa; background: rgba(37,99,235,0.14); }
+
+.btn-primary {
+    background: #2563eb;
+    color: #fff;
+    transition: background .18s ease, transform .12s ease;
+}
+.btn-primary:hover { background: #1d4ed8; }
+.btn-primary:active { transform: translateY(1px); }
+
+.tbl th { font-weight: 600; color: #8b93a1; }
+.tbl-row { transition: background-color .15s ease; }
+.tbl-row:hover { background: rgba(37,99,235,0.05); }
+
+@keyframes fadeUp { from { opacity:0; transform: translateY(10px);} to {opacity:1; transform:none;} }
+.fade-up { animation: fadeUp .4s ease both; }
