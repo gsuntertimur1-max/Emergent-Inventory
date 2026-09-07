@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 
 const CatatStok = () => {
-  const { products, suppliers, addTransaction } = useData();
+  const { products, suppliers, addTransaction, canWrite } = useData();
   const navigate = useNavigate();
   const [type, setType] = useState('MASUK');
   const [rows, setRows] = useState([{ productId: '', qty: 1 }]);
@@ -25,13 +25,31 @@ const CatatStok = () => {
   const totalBerat = chosen.reduce((a, r) => a + (r.product.weight || 0) * Number(r.qty), 0);
   const totalNilai = chosen.reduce((a, r) => a + r.product.cost * Number(r.qty), 0);
 
-  const submit = () => {
+  const submit = async () => {
     if (chosen.length === 0) { toast.error('Pilih minimal satu produk'); return; }
     if (type === 'KELUAR' && !party) { toast.error('Isi penerima barang'); return; }
-    addTransaction({ type, items: chosen.map((r) => ({ productId: r.productId, qty: Number(r.qty) })), party, ref, polisi, kondisi, keterangan: ket });
-    toast.success(type === 'MASUK' ? 'Stok masuk tersimpan' : 'Surat jalan dibuat & stok keluar tersimpan');
-    if (type === 'KELUAR') navigate('/pengeluaran'); else navigate('/riwayat');
+    try {
+      await addTransaction({ type, items: chosen.map((r) => ({ productId: r.productId, qty: Number(r.qty) })), party, ref, polisi, kondisi, keterangan: ket });
+      toast.success(type === 'MASUK' ? 'Stok masuk tersimpan' : 'Surat jalan dibuat & stok keluar tersimpan');
+      if (type === 'KELUAR') navigate('/pengeluaran'); else navigate('/riwayat');
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Gagal menyimpan transaksi');
+    }
   };
+
+  if (!canWrite) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <div className="label-mono mb-2">Operasional Gudang</div>
+          <h1 className="font-display text-4xl font-bold">Pencatatan Stok Masuk / Keluar</h1>
+        </div>
+        <div className="card-surface p-8 text-center" data-testid="readonly-notice">
+          <p className="text-[#8b93a1]">Peran <span className="text-white font-semibold">Pemantau</span> hanya dapat melihat data. Hubungi Administrator untuk akses pencatatan stok.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -45,8 +63,8 @@ const CatatStok = () => {
         <div className="card-surface p-6 lg:col-span-2">
           <h2 className="font-display text-lg font-bold mb-4">Formulir Transaksi</h2>
           <div className="grid grid-cols-2 gap-2 mb-5 p-1 bg-[#0b0f17] rounded-xl border border-[#1a222e]">
-            <button onClick={() => setType('MASUK')} className={`flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-colors ${type === 'MASUK' ? 'bg-[#22c55e]/15 text-[#22c55e]' : 'text-[#8b93a1]'}`}><ArrowDownLeft size={16} /> Stok Masuk</button>
-            <button onClick={() => setType('KELUAR')} className={`flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-colors ${type === 'KELUAR' ? 'bg-[#ef4444]/15 text-[#ef4444]' : 'text-[#8b93a1]'}`}><ArrowUpRight size={16} /> Stok Keluar</button>
+            <button data-testid="txn-type-masuk" onClick={() => setType('MASUK')} className={`flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-colors ${type === 'MASUK' ? 'bg-[#22c55e]/15 text-[#22c55e]' : 'text-[#8b93a1]'}`}><ArrowDownLeft size={16} /> Stok Masuk</button>
+            <button data-testid="txn-type-keluar" onClick={() => setType('KELUAR')} className={`flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-colors ${type === 'KELUAR' ? 'bg-[#ef4444]/15 text-[#ef4444]' : 'text-[#8b93a1]'}`}><ArrowUpRight size={16} /> Stok Keluar</button>
           </div>
 
           <label className="text-sm font-medium mb-2 block">Daftar Barang</label>
@@ -55,11 +73,11 @@ const CatatStok = () => {
               const prod = products.find((p) => p.id === r.productId);
               return (
                 <div key={i} className="flex gap-2 items-center">
-                  <select value={r.productId} onChange={(e) => setRow(i, { productId: e.target.value })} className="flex-1 bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[#2563eb]">
+                  <select data-testid={`txn-product-select-${i}`} value={r.productId} onChange={(e) => setRow(i, { productId: e.target.value })} className="flex-1 bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[#2563eb]">
                     <option value="">Pilih produk...</option>
-                    {products.map((p) => <option key={p.id} value={p.id}>{p.name} ({formatNum(p.stock)} {p.unit})</option>)}
+                    {products.map((p) => <option key={p.id} value={p.id}>{`${p.name} (${formatNum(p.stock)} ${p.unit})`}</option>)}
                   </select>
-                  <input type="number" min="1" value={r.qty} onChange={(e) => setRow(i, { qty: e.target.value })} className="w-24 bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[#2563eb]" />
+                  <input data-testid={`txn-qty-input-${i}`} type="number" min="1" value={r.qty} onChange={(e) => setRow(i, { qty: e.target.value })} className="w-24 bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[#2563eb]" />
                   <span className="text-xs text-[#6b7688] w-10">{prod?.unit || '—'}</span>
                   <button onClick={() => delRow(i)} className="w-9 h-9 rounded-lg border border-[#242f3d] flex items-center justify-center text-[#ef4444] hover:bg-[#ef4444]/10"><Trash2 size={15} /></button>
                 </div>
@@ -70,14 +88,14 @@ const CatatStok = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div><label className="text-sm font-medium mb-1.5 block">{type === 'MASUK' ? 'Supplier Pengirim' : 'Penerima Barang'}</label>{type === 'MASUK' ? (
-              <select value={party} onChange={(e) => setParty(e.target.value)} className="w-full bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[#2563eb]"><option value="">Pilih supplier...</option>{suppliers.map((s) => <option key={s.id}>{s.name}</option>)}</select>
-            ) : (<input value={party} onChange={(e) => setParty(e.target.value)} placeholder="Nama penerima / toko" className="w-full bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[#2563eb]" />)}</div>
+              <select data-testid="txn-party-select" value={party} onChange={(e) => setParty(e.target.value)} className="w-full bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[#2563eb]"><option value="">Pilih supplier...</option>{suppliers.map((s) => <option key={s.id}>{s.name}</option>)}</select>
+            ) : (<input data-testid="txn-party-input" value={party} onChange={(e) => setParty(e.target.value)} placeholder="Nama penerima / toko" className="w-full bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[#2563eb]" />)}</div>
             <div><label className="text-sm font-medium mb-1.5 block">No. Referensi / PO</label><input value={ref} onChange={(e) => setRef(e.target.value)} placeholder="PO-2026-001" className="w-full bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[#2563eb]" /></div>
             <div><label className="text-sm font-medium mb-1.5 block">Nomor Plat Kendaraan</label><input value={polisi} onChange={(e) => setPolisi(e.target.value)} placeholder="B 9021 XY" className="w-full bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[#2563eb]" /></div>
             <div><label className="text-sm font-medium mb-1.5 block">Kondisi Barang</label><select value={kondisi} onChange={(e) => setKondisi(e.target.value)} className="w-full bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[#2563eb]"><option value="BAIK">Baik (Good)</option><option value="RUSAK">Rusak (Damage)</option></select><p className="text-xs text-[#6b7688] mt-1">Stok rusak dicatat terpisah dari stok baik.</p></div>
           </div>
           <div className="mt-4"><label className="text-sm font-medium mb-1.5 block">Keterangan</label><textarea value={ket} onChange={(e) => setKet(e.target.value)} rows={2} placeholder="Muat pagi — truk B 9021 XX..." className="w-full bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[#2563eb] resize-none" /></div>
-          <button onClick={submit} className="btn-primary w-full mt-5 flex items-center justify-center gap-2 py-3 rounded-lg font-semibold text-sm"><Save size={16} /> Simpan Stok {type === 'MASUK' ? 'Masuk' : 'Keluar'}</button>
+          <button data-testid="txn-submit-btn" onClick={submit} className="btn-primary w-full mt-5 flex items-center justify-center gap-2 py-3 rounded-lg font-semibold text-sm"><Save size={16} /> Simpan Stok {type === 'MASUK' ? 'Masuk' : 'Keluar'}</button>
         </div>
 
         <div className="card-surface p-6 h-fit">

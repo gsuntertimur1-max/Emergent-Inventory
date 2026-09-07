@@ -30,9 +30,9 @@ const Riwayat = () => {
 
       <div className="card-surface p-6">
         <div className="flex flex-wrap gap-3 mb-4">
-          <div className="relative flex-1 min-w-[240px]"><Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#6b7688]" /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari No. Ref, produk, SKU, pihak terkait..." className="w-full bg-[#0b0f17] border border-[#242f3d] rounded-lg pl-9 pr-3 py-2.5 text-sm outline-none focus:border-[#2563eb]" /></div>
-          <select value={type} onChange={(e) => setType(e.target.value)} className="bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none"><option value="SEMUA">SEMUA</option><option value="MASUK">MASUK</option><option value="KELUAR">KELUAR</option></select>
-          <select value={kondisi} onChange={(e) => setKondisi(e.target.value)} className="bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none"><option value="SEMUA">SEMUA</option><option value="BAIK">BAIK</option><option value="RUSAK">RUSAK</option></select>
+          <div className="relative flex-1 min-w-[240px]"><Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#6b7688]" /><input data-testid="riwayat-search-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari No. Ref, produk, SKU, pihak terkait..." className="w-full bg-[#0b0f17] border border-[#242f3d] rounded-lg pl-9 pr-3 py-2.5 text-sm outline-none focus:border-[#2563eb]" /></div>
+          <select data-testid="riwayat-type-filter" value={type} onChange={(e) => setType(e.target.value)} className="bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none"><option value="SEMUA">SEMUA</option><option value="MASUK">MASUK</option><option value="KELUAR">KELUAR</option></select>
+          <select data-testid="riwayat-kondisi-filter" value={kondisi} onChange={(e) => setKondisi(e.target.value)} className="bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none"><option value="SEMUA">SEMUA</option><option value="BAIK">BAIK</option><option value="RUSAK">RUSAK</option></select>
           <button onClick={() => toast.success('Excel bulan ini diunduh (mock)')} className="inline-flex items-center gap-2 text-sm font-medium px-4 py-2.5 rounded-lg border border-[#242f3d] hover:bg-[#141a24]"><Download size={15} /> Unduh Excel Bulan Ini</button>
         </div>
         <p className="text-xs text-[#6b7688] mb-4">Cetak surat jalan & bon muat ada di halaman Pengeluaran.</p>

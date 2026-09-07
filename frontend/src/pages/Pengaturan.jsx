@@ -8,7 +8,7 @@ const Toggle = ({ on, onClick }) => (
 );
 
 const Pengaturan = () => {
-  const { loadSample } = useData();
+  const { user, resetData } = useData();
   const [warehouse, setWarehouse] = useState('Gudang Sunter Timur I & II');
   const [address, setAddress] = useState('Jl. Sunter Agung, Jakarta Utara');
   const [lowAlert, setLowAlert] = useState(true);
@@ -50,8 +50,11 @@ const Pengaturan = () => {
         <div className="card-surface p-6">
           <div className="flex items-center gap-2 mb-5"><Database size={18} className="text-[#22c55e]" /><h2 className="font-display text-lg font-bold">Data</h2></div>
           <div className="space-y-3">
-            <button onClick={() => { loadSample(); toast.success('Data contoh dimuat ulang'); }} className="w-full text-left p-3 rounded-lg bg-[#0b0f17] border border-[#151d28] hover:border-[#2563eb] transition-colors text-sm">Muat ulang data contoh (15 produk, 34 transaksi)</button>
-            <button onClick={() => { localStorage.removeItem('bulog_data'); toast.success('Data direset — muat ulang halaman'); }} className="w-full text-left p-3 rounded-lg bg-[#0b0f17] border border-[#151d28] hover:border-[#ef4444] transition-colors text-sm text-[#f87171]">Reset semua data lokal</button>
+            {user?.role === 'Administrator' ? (
+              <button data-testid="reset-data-btn" onClick={async () => { if (!window.confirm('Hapus semua transaksi, surat jalan & PO, lalu muat ulang produk & supplier dari data master CSV?')) return; try { await resetData(); toast.success('Data direset — produk & supplier dimuat ulang dari CSV master'); } catch { toast.error('Gagal mereset data'); } }} className="w-full text-left p-3 rounded-lg bg-[#0b0f17] border border-[#151d28] hover:border-[#ef4444] transition-colors text-sm text-[#f87171]">Reset semua transaksi & muat ulang data master dari CSV (31 produk)</button>
+            ) : (
+              <p className="text-sm text-[#6b7688] p-3">Hanya Administrator yang dapat mereset data.</p>
+            )}
           </div>
         </div>
       </div>

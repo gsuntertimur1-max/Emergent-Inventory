@@ -7,11 +7,13 @@ import { toast } from 'sonner';
 const Supplier = () => {
   const { suppliers, products, addSupplier } = useData();
   const [modal, setModal] = useState(false);
-  const [form, setForm] = useState({ name: '', pic: '', phone: '', email: '', address: '', category: 'F&B / Bahan Makanan' });
+  const [form, setForm] = useState({ name: '', pic: '', phone: '', email: '', address: '', category: 'Beras' });
 
-  const save = () => {
+  const save = async () => {
     if (!form.name) { toast.error('Nama supplier wajib diisi'); return; }
-    addSupplier(form); toast.success('Supplier ditambahkan'); setModal(false); setForm({ name: '', pic: '', phone: '', email: '', address: '', category: 'F&B / Bahan Makanan' });
+    try {
+      await addSupplier(form); toast.success('Supplier ditambahkan'); setModal(false); setForm({ name: '', pic: '', phone: '', email: '', address: '', category: 'Beras' });
+    } catch { toast.error('Gagal menambah supplier'); }
   };
 
   return (
@@ -22,7 +24,7 @@ const Supplier = () => {
           <h1 className="font-display text-4xl font-bold">Supplier</h1>
           <p className="text-[#8b93a1] mt-2">{suppliers.length} supplier terdaftar</p>
         </div>
-        <button onClick={() => setModal(true)} className="btn-primary inline-flex items-center gap-2 text-sm font-semibold px-4 py-2.5 rounded-lg"><Plus size={15} /> Tambah Supplier</button>
+        <button data-testid="add-supplier-btn" onClick={() => setModal(true)} className="btn-primary inline-flex items-center gap-2 text-sm font-semibold px-4 py-2.5 rounded-lg"><Plus size={15} /> Tambah Supplier</button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -52,10 +54,10 @@ const Supplier = () => {
             <div className="flex items-center justify-between mb-5"><h2 className="font-display text-xl font-bold">Tambah Supplier</h2><button onClick={() => setModal(false)} className="text-[#8b93a1] hover:text-white"><X size={20} /></button></div>
             <div className="space-y-4">
               {[['name', 'Nama Supplier'], ['pic', 'PIC / Narahubung'], ['phone', 'Telepon'], ['email', 'Email'], ['address', 'Alamat']].map(([k, l]) => (
-                <div key={k}><label className="text-xs font-medium mb-1 block text-[#8b93a1]">{l}</label><input value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value })} className="w-full bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[#2563eb]" /></div>
+                <div key={k}><label className="text-xs font-medium mb-1 block text-[#8b93a1]">{l}</label><input data-testid={`supplier-form-${k}`} value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value })} className="w-full bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[#2563eb]" /></div>
               ))}
             </div>
-            <div className="flex justify-end gap-2 mt-6"><button onClick={() => setModal(false)} className="px-4 py-2.5 rounded-lg border border-[#242f3d] text-sm hover:bg-[#141a24]">Batal</button><button onClick={save} className="btn-primary px-5 py-2.5 rounded-lg text-sm font-semibold">Simpan</button></div>
+            <div className="flex justify-end gap-2 mt-6"><button onClick={() => setModal(false)} className="px-4 py-2.5 rounded-lg border border-[#242f3d] text-sm hover:bg-[#141a24]">Batal</button><button data-testid="supplier-save-btn" onClick={save} className="btn-primary px-5 py-2.5 rounded-lg text-sm font-semibold">Simpan</button></div>
           </div>
         </div>
       )}

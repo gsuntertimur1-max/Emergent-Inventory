@@ -32,7 +32,7 @@ const Pengeluaran = () => {
 
       <div className="card-surface p-6">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <select value={filter} onChange={(e) => setFilter(e.target.value)} className="bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none"><option>Semua Status</option><option>Menunggu</option><option>Sedang Dimuat</option><option>Selesai</option></select>
+          <select data-testid="sj-status-filter" value={filter} onChange={(e) => setFilter(e.target.value)} className="bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none"><option>Semua Status</option><option>Menunggu</option><option>Sedang Dimuat</option><option>Selesai</option></select>
           <button onClick={() => { toast.success(`Mencetak ${selected.length} surat jalan (mock)`); }} className="inline-flex items-center gap-2 text-sm font-medium px-4 py-2.5 rounded-lg border border-[#242f3d] hover:bg-[#141a24]"><Printer size={15} /> Cetak Surat Jalan ({selected.length}) — A4</button>
         </div>
 
@@ -52,8 +52,8 @@ const Pengeluaran = () => {
                   <td className="py-3 pr-4 font-mono">{formatNum(sj.unit)}</td>
                   <td className="py-3 pr-4"><span className="text-xs px-2.5 py-1 rounded-full font-medium whitespace-nowrap" style={{ background: STATUS[sj.status]?.bg, color: STATUS[sj.status]?.c }}>{sj.status}</span></td>
                   <td className="py-3 pr-4">
-                    {sj.status === 'Menunggu' && <button onClick={() => { updateSJStatus(sj.id, 'Sedang Dimuat'); toast.success('Mulai memuat'); }} className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-[#2563eb] text-[#60a5fa] hover:bg-[#2563eb]/10 whitespace-nowrap">Mulai Muat</button>}
-                    {sj.status === 'Sedang Dimuat' && <button onClick={() => { updateSJStatus(sj.id, 'Selesai'); toast.success('Pemuatan selesai'); }} className="btn-primary text-xs font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap">Selesai</button>}
+                    {sj.status === 'Menunggu' && <button data-testid={`sj-mulai-muat-btn-${sj.no}`} onClick={() => { updateSJStatus(sj.id, 'Sedang Dimuat'); toast.success('Mulai memuat'); }} className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-[#2563eb] text-[#60a5fa] hover:bg-[#2563eb]/10 whitespace-nowrap">Mulai Muat</button>}
+                    {sj.status === 'Sedang Dimuat' && <button data-testid={`sj-selesai-btn-${sj.no}`} onClick={() => { updateSJStatus(sj.id, 'Selesai'); toast.success('Pemuatan selesai'); }} className="btn-primary text-xs font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap">Selesai</button>}
                     {sj.status === 'Selesai' && <span className="text-xs text-[#6b7688]">—</span>}
                   </td>
                 </tr>

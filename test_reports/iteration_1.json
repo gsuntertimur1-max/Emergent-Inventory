@@ -1,0 +1,82 @@
+{
+  "summary": "Full backend + frontend E2E test of the Bulog warehouse app after conversion from mock to MongoDB/JWT backend. Backend: 40 pytest cases across auth (JWT + Emergent google session injection), user management, master data (31 CSV products / 7 suppliers), transactions + surat jalan, purchase orders, CSV import and admin reset. 35/40 passed. Frontend: verified auth guard/redirect, login (valid + invalid), full Pengguna CRUD (create user -> login, role change, password change, activate/deactivate, delete), Catat Stok KELUAR -> surat jalan SJ-202608-002 / antrian A-002 -> status flow Menunggu->Sedang Dimuat->Selesai (persisted after reload), Riwayat audit trail, PO creation (PO-2026-001..003 sequence), CSV import via /import UI -> product+supplier visible, Operator RBAC in UI, logout. DB left pristine via POST /api/admin/reset-data (31 products, 7 suppliers, 0 transactions/SJ/PO, only admin user).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "DELETE /api/products/{id}, POST /api/transactions, POST /api/products, POST/PUT/DELETE /api/suppliers, POST /api/import/csv", "issue": "No role-based authorization on any data-mutating endpoint - only get_current_user. A user with the read-only 'Pemantau' role (the role auto-assigned to EVERY new Emergent Google login) can delete products and post stock transactions (verified: both returned 200 instead of 403). Any Google account that logs in gains full write access to warehouse stock.", "priority": "CRITICAL"},
+      {"endpoint": "POST /api/auth/login", "issue": "No brute-force protection / account lockout: 7 consecutive wrong-password attempts all returned 401, playbook requires lockout (429/423) after 5 failures.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/transactions", "issue": "Negative qty accepted (qty=-5 with type MASUK returned 200 and decremented stock). Add qty > 0 validation in TxnItem."},
+      {"endpoint": "POST /api/transactions", "issue": "Auto-generated ref is malformed: `time[-8:-3].replace(':','')` on an ISO string with '+00:00' offset produces refs like 'OUT-74+00' / 'IN-83+00' (visible in Riwayat 'No. Referensi' column). Should use a real time/sequence format."},
+      {"endpoint": "POST /api/transactions (KELUAR, kondisi=RUSAK)", "issue": "KELUAR with kondisi RUSAK skips the stock-sufficiency check and decrements `damaged` without any floor, so `damaged` can go negative."},
+      {"endpoint": "seed_admin()", "issue": "Only inserts the admin when missing; if ADMIN_PASSWORD in .env is changed the existing admin hash is never updated (playbook expects seed to update password)."},
+      {"endpoint": "CORS middleware", "issue": "allow_credentials=True combined with CORS_ORIGINS='*' - browsers reject credentialed cross-origin requests with wildcard origin, so the httpOnly access_token cookie set at login is unusable. App works only because the frontend sends the Bearer token. Use explicit origins."},
+      {"endpoint": "POST /api/auth/logout", "issue": "For JWT (local) logins logout only clears cookies; the JWT stays valid for 7 days server-side (no revocation list). Acceptable for MVP but worth noting."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Header / Toaster", "issue": "Toast notifications render top-right on top of the header user block and the logout button, and intercept pointer events - a normal Playwright click on the logout button (title='Keluar') timed out while a toast was visible (~4s window). Real users can miss/misclick logout right after any save action. Fix: move Toaster (e.g. bottom-right) or raise header z-index / set pointer-events none on the toast container.", "selector": "header button[title='Keluar']", "priority": "HIGH"},
+      {"component": "CatatStok.jsx, Pengeluaran.jsx, PurchaseOrder.jsx, DaftarProduk.jsx, Supplier.jsx, Riwayat.jsx", "issue": "No data-testid attributes at all on these pages (product select, qty input, submit button, 'Mulai Muat'/'Selesai' status buttons, 'Buat PO Baru'/'Simpan PO', product edit/delete icons). Tests had to fall back on text/CSS selectors.", "selector": "n/a", "priority": "MEDIUM"},
+      {"component": "React DOM nesting", "issue": "Console error on app load: 'In HTML, <span> cannot be a child of <option> ... This will cause a hydration error.' Invalid markup inside a <select>/<option> somewhere in the shared layout.", "selector": "console", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "All pages (form controls)", "issues": ["Native browser <select> elements are used everywhere (role select on Pengguna, product/supplier/kondisi selects on Catat Stok, filters on Riwayat/Pengeluaran/Daftar Produk) instead of the shadcn Select component - visibly inconsistent (default OS dropdown arrow, light popup) against the dark theme."]},
+      {"screen": "Header navigation", "issues": ["At 1920px the nav wraps onto 3 lines (Pengaturan sits alone on the third row), leaving an unbalanced header."]},
+      {"screen": "Dashboard / Purchase Order", "issues": ["All CSV products have harga_beli 0, so 'TOTAL NILAI INVENTORI' and every PO 'Total Nilai' render as Rp 0 - data-driven, but consider hiding/annotating the value cards when cost data is absent."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/test_auth.py",
+    "/app/backend/tests/test_master_data.py",
+    "/app/backend/tests/test_users.py",
+    "/app/backend/tests/test_operations.py",
+    "/app/backend/tests/test_google_session.py",
+    "/app/backend/tests/test_rbac_writes.py",
+    "/app/backend/tests/test_zz_reset.py",
+    "/app/test_reports/pytest/p1.xml",
+    "/app/test_reports/pytest/p2.xml",
+    "/app/test_reports/pytest/p3.xml",
+    "/app/test_reports/pytest/p4.xml",
+    "/app/test_reports/pytest/p5.xml",
+    "/app/test_reports/pytest/p6.xml"
+  ],
+  "action_items": [
+    "CRITICAL: add role-based authorization to mutating endpoints (products, suppliers, transactions, surat-jalan status, purchase-orders, import/csv). 'Pemantau' (default Google role) must be read-only; today it can delete products and post stock movements.",
+    "HIGH: add brute-force lockout on POST /api/auth/login (e.g. 5 failures -> 429/lock window).",
+    "HIGH: fix toast overlay blocking the header logout button (move Toaster or pointer-events/z-index fix).",
+    "Validate qty > 0 in TxnItem and prevent negative `damaged` on RUSAK KELUAR.",
+    "Fix auto-generated transaction ref format (currently 'OUT-74+00').",
+    "Set explicit CORS_ORIGINS instead of '*' since allow_credentials=True.",
+    "Make seed_admin update the existing admin password when ADMIN_PASSWORD changes.",
+    "Add data-testid attributes to CatatStok, Pengeluaran, PurchaseOrder, DaftarProduk, Supplier, Riwayat interactive elements.",
+    "Replace native <select> with the shadcn Select component for theme consistency.",
+    "Fix the <span> inside <option> DOM-nesting console error."
+  ],
+  "critical_code_review_comments": [
+    "server.py has a single require_admin dependency but no per-role write guard; introduce require_roles({'Administrator','Supervisor','Operator'}) and apply to all POST/PUT/DELETE data routes.",
+    "create_transaction is not atomic: surat jalan is inserted before product stock updates and there is no transaction/rollback - a mid-loop failure leaves an SJ without matching stock movement.",
+    "Surat jalan / PO numbering uses count_documents() + 1, which is race-prone under concurrent requests (duplicate SJ/PO numbers possible); use an atomic counter document with find_one_and_update.",
+    "delete_product / delete_supplier return {'ok': true} even when nothing matched - should return 404 for unknown ids (products PUT correctly 404s).",
+    "Transaction 'MASUK' with kondisi RUSAK increments damaged but never validates the product has capacity; also stock and damaged are never floored at 0."
+  ],
+  "updated_files": [
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/test_auth.py",
+    "/app/backend/tests/test_master_data.py",
+    "/app/backend/tests/test_users.py",
+    "/app/backend/tests/test_operations.py",
+    "/app/backend/tests/test_google_session.py",
+    "/app/backend/tests/test_rbac_writes.py",
+    "/app/backend/tests/test_zz_reset.py"
+  ],
+  "success_rate": {"backend": "88% (35/40 - 5 failures: 2 RBAC write-permission, 1 brute-force lockout, 1 negative-qty validation, plus 1 test-assumption fix)", "frontend": "95% (all flows working; 1 toast/logout overlay defect)"},
+  "seed_data_creation": "Temporary users test_qa_op, test_qa_admin2, test_qa_pemantau(2), uitestop, uioverlay, uirbac; products TEST_SKU_1, TESTNEW001, UITESTSKU9; suppliers TEST_SUP QA, TEST_SUPPLIER IMPORT, UITEST SUPPLIER UI; a few TEST/UITEST transactions, 2 surat jalan and 3 POs. ALL cleaned up - POST /api/admin/reset-data run at the end, verified 31 products / 7 suppliers / 0 transactions / 0 surat jalan / 0 PO and only the 'admin' user remains.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "admin / admin123 (Administrator) - valid, verified. bcrypt hash starts with $2b$, users.username has a unique index.",
+  "context_for_next_testing_agent": "Pytest suite lives in /app/backend/tests (conftest provides base_url/admin/test_credentials fixtures). Run per-file sequentially because pytest.ini forces -n 2 --dist loadscope and the suites share one preview DB; ALWAYS run tests/test_zz_reset.py last (it wipes and re-seeds). Google auth is tested by injecting a user + user_sessions doc via mongosh (see test_google_session.py) - real OAuth is not automatable. Known intentional mocks: 'Cetak Surat Jalan' toast, Pengaturan profile/notification toggles. Open failures to re-verify after fixes: test_rbac_writes.py (2), test_auth.py::test_brute_force_lockout, test_operations.py::test_negative_qty_masuk.",
+  "rca_of_the_issue": "RBAC gap: every data route depends only on get_current_user, so role is never checked outside /users and /admin/reset-data; combined with google_session() assigning role 'Pemantau' to new Google users, any Google account gets full write access. Toast overlay: the react-hot-toast container is fixed top-right with a z-index above the sticky header, so the header's logout button is covered while a toast is displayed. Malformed txn ref: `time[-8:-3]` slices the '+00:00' UTC offset out of the ISO timestamp."
+}

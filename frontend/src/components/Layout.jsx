@@ -1,8 +1,7 @@
 import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { LayoutGrid, Boxes, Upload, Layers, ArrowLeftRight, Send, History, ClipboardList, Truck, MonitorSmartphone, Users, Settings, RefreshCw, PlusCircle, LogOut } from 'lucide-react';
+import { LayoutGrid, Boxes, Upload, Layers, ArrowLeftRight, Send, History, ClipboardList, Truck, MonitorSmartphone, Users, Settings, PlusCircle, LogOut } from 'lucide-react';
 import { useData } from '../context/DataContext';
-import { toast } from 'sonner';
 
 const NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutGrid },
@@ -20,7 +19,7 @@ const NAV = [
 ];
 
 const Layout = ({ children }) => {
-  const { user, logout, loadSample } = useData();
+  const { user, logout, canWrite } = useData();
   const navigate = useNavigate();
 
   return (
@@ -45,18 +44,15 @@ const Layout = ({ children }) => {
           </nav>
 
           <div className="flex items-center gap-2 shrink-0">
-            <button onClick={() => { loadSample(); toast.success('Data contoh dimuat: 15 produk, 34 transaksi'); }} className="hidden xl:inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border border-[#242f3d] text-[#aab4c4] hover:bg-[#141a24] transition-colors">
-              <RefreshCw size={14} /> Muat Data Contoh
-            </button>
-            <button onClick={() => navigate('/catat')} className="btn-primary inline-flex items-center gap-1.5 text-xs font-semibold px-3.5 py-2 rounded-lg">
+            {canWrite && <button data-testid="header-catat-btn" onClick={() => navigate('/catat')} className="btn-primary inline-flex items-center gap-1.5 text-xs font-semibold px-3.5 py-2 rounded-lg">
               <PlusCircle size={15} /> Catat Transaksi
-            </button>
+            </button>}
             <div className="flex items-center gap-2 pl-2">
               <div className="text-right leading-tight hidden md:block">
                 <div className="text-[13px] font-semibold">{user?.name}</div>
                 <div className="label-mono text-[9px]">{user?.role}</div>
               </div>
-              <button onClick={logout} title="Keluar" className="w-9 h-9 rounded-lg border border-[#242f3d] flex items-center justify-center text-[#8b93a1] hover:text-white hover:bg-[#141a24] transition-colors">
+              <button data-testid="logout-btn" onClick={logout} title="Keluar" className="w-9 h-9 rounded-lg border border-[#242f3d] flex items-center justify-center text-[#8b93a1] hover:text-white hover:bg-[#141a24] transition-colors">
                 <LogOut size={16} />
               </button>
             </div>

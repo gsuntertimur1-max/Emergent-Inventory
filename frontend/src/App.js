@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import './App.css';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { DataProvider, useData } from './context/DataContext';
 import Layout from './components/Layout';
@@ -18,13 +18,42 @@ import Pengaturan from './pages/Pengaturan';
 import ImportData from './pages/ImportData';
 import TumpukanStok from './pages/TumpukanStok';
 
+const Loading = () => (
+  <div className="app-bg flex items-center justify-center min-h-screen">
+    <div className="text-[#8b93a1] text-sm animate-pulse">Memuat...</div>
+  </div>
+);
+
+// REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+const AuthCallback = () => {
+  const { processSession } = useData();
+  const navigate = useNavigate();
+  const hasProcessed = useRef(false);
+
+  useEffect(() => {
+    if (hasProcessed.current) return;
+    hasProcessed.current = true;
+    const sessionId = new URLSearchParams(window.location.hash.replace('#', '')).get('session_id');
+    window.history.replaceState(null, '', window.location.pathname);
+    if (!sessionId) { navigate('/login', { replace: true }); return; }
+    processSession(sessionId)
+      .then(() => navigate('/', { replace: true }))
+      .catch(() => navigate('/login', { replace: true }));
+  }, [navigate, processSession]);
+
+  return <Loading />;
+};
+
 const Protected = ({ children }) => {
-  const { user } = useData();
+  const { user, checking } = useData();
+  if (checking) return <Loading />;
   if (!user) return <Navigate to="/login" replace />;
   return <Layout>{children}</Layout>;
 };
 
 function AppRoutes() {
+  const location = useLocation();
+  if (location.hash?.includes('session_id=')) return <AuthCallback />;
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
@@ -48,7 +77,7 @@ function AppRoutes() {
 function App() {
   return (
     <DataProvider>
-      <Toaster theme="dark" position="top-right" richColors />
+      <Toaster theme="dark" position="bottom-right" richColors />
       <BrowserRouter>
         <AppRoutes />
       </BrowserRouter>

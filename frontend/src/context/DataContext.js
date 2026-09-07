@@ -1,88 +1,99 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { PRODUCTS, SUPPLIERS, SURAT_JALAN, PURCHASE_ORDERS, USERS, buildTransactions } from '../mock';
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import api, { setToken, apiError } from '../lib/api';
 
 const DataContext = createContext(null);
 export const useData = () => useContext(DataContext);
 
-const LS_AUTH = 'bulog_auth';
-const LS_DATA = 'bulog_data';
+const EMPTY = { products: [], suppliers: [], suratJalan: [], purchaseOrders: [], users: [], transactions: [] };
 
 export const DataProvider = ({ children }) => {
-  const [user, setUser] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(LS_AUTH)) || null; } catch { return null; }
-  });
+  const [user, setUser] = useState(null);
+  const [checking, setChecking] = useState(true);
+  const [state, setState] = useState(EMPTY);
 
-  const emptyState = { products: [], suppliers: SUPPLIERS, suratJalan: [], purchaseOrders: [], users: USERS, transactions: [], loaded: false };
-
-  const [state, setState] = useState(() => {
+  const fetchAll = useCallback(async () => {
     try {
-      const saved = JSON.parse(localStorage.getItem(LS_DATA));
-      if (saved) return saved;
-    } catch {}
-    return emptyState;
-  });
-
-  useEffect(() => { localStorage.setItem(LS_DATA, JSON.stringify(state)); }, [state]);
-
-  const login = (username, password) => {
-    if (username === 'admin' && password === 'admin123') {
-      const u = { name: 'Administrator Gudang', role: 'Administrator', username: 'admin' };
-      setUser(u); localStorage.setItem(LS_AUTH, JSON.stringify(u)); return true;
+      const [p, s, sj, po, u, t] = await Promise.all([
+        api.get('/products'), api.get('/suppliers'), api.get('/surat-jalan'),
+        api.get('/purchase-orders'), api.get('/users'), api.get('/transactions'),
+      ]);
+      setState({ products: p.data, suppliers: s.data, suratJalan: sj.data, purchaseOrders: po.data, users: u.data, transactions: t.data });
+    } catch (e) {
+      console.error('fetchAll failed', e);
     }
-    return false;
+  }, []);
+
+  useEffect(() => {
+    // If returning from OAuth callback, AuthCallback handles the session exchange first
+    if (window.location.hash?.includes('session_id=')) { setChecking(false); return; }
+    const token = localStorage.getItem('bulog_token');
+    if (!token) { setChecking(false); return; }
+    api.get('/auth/me')
+      .then((r) => setUser(r.data))
+      .catch(() => setToken(null))
+      .finally(() => setChecking(false));
+  }, []);
+
+  useEffect(() => { if (user) fetchAll(); }, [user, fetchAll]);
+
+  const login = async (username, password) => {
+    try {
+      const { data } = await api.post('/auth/login', { username, password });
+      setToken(data.token);
+      setUser(data.user);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: apiError(e) };
+    }
   };
+
   const loginGoogle = () => {
-    const u = { name: 'Pengguna Google', role: 'Pemantau', username: 'google_user' };
-    setUser(u); localStorage.setItem(LS_AUTH, JSON.stringify(u));
-  };
-  const logout = () => { setUser(null); localStorage.removeItem(LS_AUTH); };
-
-  const loadSample = () => {
-    setState({
-      products: JSON.parse(JSON.stringify(PRODUCTS)),
-      suppliers: SUPPLIERS,
-      suratJalan: JSON.parse(JSON.stringify(SURAT_JALAN)),
-      purchaseOrders: JSON.parse(JSON.stringify(PURCHASE_ORDERS)),
-      users: USERS,
-      transactions: buildTransactions(),
-      loaded: true,
-    });
+    // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+    const redirectUrl = window.location.origin + '/';
+    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
   };
 
-  const addProduct = (p) => setState((s) => ({ ...s, products: [...s.products, { ...p, id: 'p' + Date.now(), damaged: p.damaged || 0 }] }));
-  const updateProduct = (id, patch) => setState((s) => ({ ...s, products: s.products.map((p) => (p.id === id ? { ...p, ...patch } : p)) }));
-  const deleteProduct = (id) => setState((s) => ({ ...s, products: s.products.filter((p) => p.id !== id) }));
-
-  const addTransaction = ({ type, items, party, ref, polisi, kondisi, keterangan }) => {
-    setState((s) => {
-      const products = s.products.map((p) => ({ ...p }));
-      const newTxns = [];
-      items.forEach((it) => {
-        const prod = products.find((p) => p.id === it.productId);
-        if (!prod) return;
-        const delta = type === 'MASUK' ? it.qty : -it.qty;
-        if (kondisi === 'RUSAK') { prod.damaged = (prod.damaged || 0) + Math.abs(delta) * (type === 'MASUK' ? 1 : -1); }
-        else { prod.stock = prod.stock + delta; }
-        newTxns.push({ id: 't' + Date.now() + Math.random(), time: new Date().toISOString(), ref: ref || (type === 'MASUK' ? 'IN-' : 'OUT-') + Date.now().toString().slice(-4), antrian: type === 'KELUAR' ? 'A-' + String(s.suratJalan.length + 1).padStart(3, '0') : '', type, kondisi: kondisi || 'BAIK', product: prod.name, sku: prod.sku, change: delta, penerima: party || '-', polisi: polisi || '', operator: 'Administrator Gudang' });
-      });
-      let suratJalan = s.suratJalan;
-      if (type === 'KELUAR') {
-        const sjItems = items.map((it) => { const prod = products.find((p) => p.id === it.productId); return { name: prod?.name, qty: it.qty, unit: prod?.unit, berat: (prod?.weight || 0) * it.qty, sec: '' }; });
-        const totalUnit = items.reduce((a, it) => a + it.qty, 0);
-        const totalBerat = sjItems.reduce((a, i) => a + i.berat, 0);
-        suratJalan = [{ id: 'sj' + Date.now(), no: 'SJ-2026' + String(s.suratJalan.length + 11).padStart(2, '0'), antrian: 'A-' + String(s.suratJalan.length + 1).padStart(3, '0'), time: new Date().toISOString(), penerima: party || '-', polisi: polisi || '', operator: 'Administrator Gudang', status: 'Menunggu', ref: ref || '', items: sjItems, berat: totalBerat, unit: totalUnit }, ...s.suratJalan];
-      }
-      return { ...s, products, transactions: [...newTxns, ...s.transactions], suratJalan };
-    });
+  const processSession = async (sessionId) => {
+    const { data } = await api.post('/auth/session', { session_id: sessionId });
+    setToken(data.session_token);
+    setUser(data.user);
+    return data.user;
   };
 
-  const updateSJStatus = (id, status) => setState((s) => ({ ...s, suratJalan: s.suratJalan.map((sj) => (sj.id === id ? { ...sj, status } : sj)) }));
-  const addSupplier = (sup) => setState((s) => ({ ...s, suppliers: [...s.suppliers, { ...sup, id: 'sup' + Date.now() }] }));
-  const addUser = (u) => setState((s) => ({ ...s, users: [...s.users, { ...u, id: 'u' + Date.now(), active: true }] }));
-  const addPO = (po) => setState((s) => ({ ...s, purchaseOrders: [{ ...po, id: 'po' + Date.now() }, ...s.purchaseOrders] }));
+  const logout = () => {
+    api.post('/auth/logout').catch(() => {});
+    setToken(null);
+    setUser(null);
+    setState(EMPTY);
+  };
+
+  const addProduct = async (p) => { await api.post('/products', p); await fetchAll(); };
+  const updateProduct = async (id, patch) => { await api.put(`/products/${id}`, patch); await fetchAll(); };
+  const deleteProduct = async (id) => { await api.delete(`/products/${id}`); await fetchAll(); };
+  const addTransaction = async (payload) => { await api.post('/transactions', payload); await fetchAll(); };
+  const updateSJStatus = async (id, status) => { await api.put(`/surat-jalan/${id}/status`, { status }); await fetchAll(); };
+  const addSupplier = async (sup) => { await api.post('/suppliers', sup); await fetchAll(); };
+  const addPO = async (po) => { await api.post('/purchase-orders', po); await fetchAll(); };
+  const addUser = async (u) => { await api.post('/users', u); await fetchAll(); };
+  const updateUser = async (id, patch) => { await api.put(`/users/${id}`, patch); await fetchAll(); };
+  const deleteUser = async (id) => { await api.delete(`/users/${id}`); await fetchAll(); };
+  const changeUserPassword = async (id, password) => { await api.put(`/users/${id}/password`, { password }); };
+  const resetData = async () => { await api.post('/admin/reset-data'); await fetchAll(); };
+  const importCsv = async (file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const { data } = await api.post('/import/csv', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+    await fetchAll();
+    return data;
+  };
 
   return (
-    <DataContext.Provider value={{ user, login, loginGoogle, logout, ...state, loadSample, addProduct, updateProduct, deleteProduct, addTransaction, updateSJStatus, addSupplier, addUser, addPO }}>
+    <DataContext.Provider value={{
+      user, checking, canWrite: ['Administrator', 'Supervisor', 'Operator'].includes(user?.role),
+      login, loginGoogle, processSession, logout, ...state, fetchAll,
+      addProduct, updateProduct, deleteProduct, addTransaction, updateSJStatus,
+      addSupplier, addPO, addUser, updateUser, deleteUser, changeUserPassword, resetData, importCsv,
+    }}>
       {children}
     </DataContext.Provider>
   );

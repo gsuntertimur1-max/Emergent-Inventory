@@ -14,7 +14,7 @@ const StatCard = ({ icon: Icon, label, value, sub, color }) => (
 );
 
 const Dashboard = () => {
-  const { products, transactions, loadSample, loaded } = useData();
+  const { products, transactions } = useData();
   const navigate = useNavigate();
   const [q, setQ] = useState('');
 
@@ -26,7 +26,7 @@ const Dashboard = () => {
 
   const chart = useMemo(() => {
     const days = [];
-    for (let i = 6; i >= 0; i--) { const d = new Date('2026-08-28'); d.setDate(d.getDate() - i); days.push(d); }
+    for (let i = 6; i >= 0; i--) { const d = new Date(); d.setDate(d.getDate() - i); days.push(d); }
     return days.map((d) => {
       const key = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
       const vol = transactions.filter((t) => { const td = new Date(t.time); return td.getMonth() === d.getMonth() && td.getDate() === d.getDate(); }).reduce((a, t) => a + Math.abs(t.change), 0);
@@ -63,13 +63,6 @@ const Dashboard = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard icon={Activity} label="Aktivitas 30 Hari" value={formatNum(activity30)} sub="Unit masuk & keluar" color="#eab308" />
       </div>
-
-      {!loaded && products.length === 0 && (
-        <div className="card-surface p-6 flex items-center justify-between">
-          <div><div className="font-semibold">Belum ada data</div><div className="text-sm text-[#8b93a1]">Muat data contoh untuk melihat gudang berisi 15 produk & 34 transaksi.</div></div>
-          <button onClick={loadSample} className="btn-primary px-4 py-2.5 rounded-lg text-sm font-semibold">Muat Data Contoh</button>
-        </div>
-      )}
 
       <div className="card-surface p-6">
         <div className="flex items-center gap-3 mb-4">

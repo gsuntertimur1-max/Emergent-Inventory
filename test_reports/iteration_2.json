@@ -1,0 +1,50 @@
+{
+  "summary": "Retest of iteration_1 fixes (backend + frontend). Backend: 52 pytest cases across 8 files (new /app/backend/tests/test_fixes.py + updated test_auth.py/conftest.py + regression suites) — 51 passed. All 7 reported backend fixes verified: require_write RBAC returns 403 for Pemantau on 9 write endpoints + CSV import (GETs still 200, data untouched), brute-force lockout (5x401 then 429 with Indonesian message, keyed by username), qty<=0 -> 422 (stock unchanged), RUSAK KELUAR insufficient -> 400 (damaged never negative, RUSAK MASUK->KELUAR round-trip correct), auto ref now IN-/OUT-DDHHMMSS (regex verified + visible in Riwayat as IN-28125240), DELETE product/supplier unknown id -> 404, app-level CORS explicit (localhost:8001 preflight echoes the preview origin only; note: the public URL preflight is answered by the edge proxy with '*', so CORS must be asserted against the app port). Frontend: login, dashboard (31 produk / 429.375 unit), Catat Stok MASUK & KELUAR via new testids (SJ-202608-001 + antrian A-001), Pengeluaran status flow Menunggu->Sedang Dimuat->Selesai + status filter, PO create (PO-2026-001), Supplier create, Daftar Produk add/edit/reload-persist/delete, Riwayat search+type+kondisi filters, Pengguna create user, Pemantau login (write attempt blocked with toast 'Peran Pemantau hanya dapat melihat data'), and the previously failing toast/logout overlay: logout-btn now clicks successfully while a toast is visible (Toaster is bottom-right). DB left pristine: reset-data run, only admin user, 31 products / 7 suppliers / 0 txn / 0 SJ / 0 PO, db.login_attempts emptied and admin login re-verified (200).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/suppliers/{id}", "issue": "Unknown supplier id returns 200 with body null instead of 404 (delete_supplier and update_product were fixed, update_supplier was missed). Add a matched_count check like delete_supplier. Reproduced by tests/test_fixes.py::TestDelete404::test_update_unknown_supplier_404."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Layout / all write pages (Pemantau role)", "issue": "Backend RBAC works but the UI still shows write affordances to the read-only Pemantau role: header 'Catat Transaksi' button, 'Tambah Produk', 'Tambah Supplier', 'Buat PO Baru' and the Catat Stok form/'Simpan Stok Masuk' are all rendered and clickable; the user only learns it is forbidden after submitting (error toast). Hide/disable write controls for Pemantau.", "selector": "[data-testid='header-catat-btn'], [data-testid='add-product-btn'], [data-testid='txn-submit-btn']", "priority": "MEDIUM"},
+      {"component": "React DOM nesting (select/option)", "issue": "Still present (previously reported LOW): console error 'In HTML, <span> cannot be a child of <option>. This will cause a hydration error.' fired on the dashboard/catat-stok route.", "selector": "console", "priority": "LOW"},
+      {"component": "Add/Edit modals (Daftar Produk, Pengguna)", "issue": "Tall modals are vertically centered without max-height/overflow, so at 1920x1080 the top of the modal (title + first field label) is clipped above the viewport and cannot be scrolled to. Add max-h-[90vh] overflow-y-auto.", "selector": "div.fixed.inset-0 > .card-surface", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_fixes.py",
+    "/app/backend/tests/test_auth.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/p7_fixes.xml",
+    "/app/test_reports/pytest/p8.xml",
+    "/app/test_reports/pytest/p9.xml"
+  ],
+  "action_items": [
+    "Return 404 from PUT /api/suppliers/{id} when the id does not exist (only remaining backend defect).",
+    "Hide/disable write buttons and the Catat Stok form for the Pemantau role instead of relying on a 403 toast.",
+    "Add max-h-[90vh] overflow-y-auto to the product/user modal cards - modal header is clipped off-screen at 1080p.",
+    "Fix the <span>-inside-<option> DOM nesting console error (still open from iteration_1)."
+  ],
+  "critical_code_review_comments": [
+    "update_supplier() ignores update_one().matched_count and then returns find_one(...) => null with HTTP 200; mirror the delete_supplier 404 guard.",
+    "create_transaction is still non-atomic (surat jalan inserted before stock $inc, no rollback) and SJ/PO numbering still uses count_documents()+1 (race-prone) - acceptable for MVP but noted again.",
+    "Login lockout counter is stored per username with no cap on document growth; consider a TTL index on login_attempts.last_attempt so stale counters expire automatically."
+  ],
+  "updated_files": [
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/test_auth.py",
+    "/app/backend/tests/test_fixes.py",
+    "/app/frontend/src/pages/DaftarProduk.jsx"
+  ],
+  "success_rate": {"backend": "98% (51/52 - only PUT /api/suppliers unknown-id 404)", "frontend": "100% of tested flows functional (3 UX/markup issues, no blocking bug; toast/logout overlay fix confirmed)"},
+  "seed_data_creation": "Temporary: users test_qa_ro_pemantau/test_qa_pemantau/test_qa_op/qauipemantau, products TEST_RBAC1/QAUISKU1/TESTNEW001, supplier 'QA SUPPLIER UI', a few TEST/QA transactions, 1 surat jalan (SJ-202608-001), 1 PO (PO-2026-001). ALL cleaned: POST /api/admin/reset-data + non-admin users deleted + db.login_attempts emptied. Verified 31 products / 7 suppliers / 0 transactions / 0 SJ / 0 PO / users=['admin'].",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin / admin123 (Administrator) - verified working after the brute-force test and login_attempts cleanup.",
+  "context_for_next_testing_agent": "Run test files sequentially (pytest.ini forces -n 2 loadscope, shared preview DB); run tests/test_zz_reset.py LAST. New conftest fixture clear_login_attempts(identifier) wipes db.login_attempts via pymongo - always use it around brute-force tests and never brute-force the real 'admin' username. CORS assertions must target http://localhost:8001 because the public-URL preflight is handled by the edge proxy ('*'). Frontend testids for DaftarProduk modal added this iteration: product-form-{name,sku,stock,damaged,cost,min,location,weight}, product-save-btn, product-modal-close-btn. Remaining open: PUT /api/suppliers 404, Pemantau write buttons visible in UI, modal clipping, <span>-in-<option> console error.",
+  "rca_of_the_issue": "PUT /api/suppliers/{id}: the handler performs update_one without checking matched_count and then returns find_one(), which yields null serialized as HTTP 200 - unknown ids are silently accepted. Pemantau UI issue: navigation and page-level action buttons are rendered unconditionally; role is only enforced server-side by require_write, so the client shows actions that always 403."
+}

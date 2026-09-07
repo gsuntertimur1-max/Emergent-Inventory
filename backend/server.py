@@ -1,72 +1,653 @@
-from fastapi import FastAPI, APIRouter
 from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-import os
-import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List
-import uuid
-from datetime import datetime, timezone
-
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
+import os
+import io
+import csv
+import uuid
+import logging
+import bcrypt
+import jwt
+import httpx
+from collections import Counter
+from datetime import datetime, timezone, timedelta
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File
+from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import BaseModel, Field
+from typing import List, Optional
+
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# Create the main app without a prefix
-app = FastAPI()
+JWT_ALG = "HS256"
+JWT_SECRET = os.environ['JWT_SECRET']
 
-# Create a router with the /api prefix
+app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-# Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
-    
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
+# ---------- helpers ----------
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
-# Add your routes to the router instead of directly to app
+
+def verify_password(plain: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    except Exception:
+        return False
+
+
+def create_access_token(user_id: str) -> str:
+    payload = {"sub": user_id, "type": "access", "exp": datetime.now(timezone.utc) + timedelta(days=7)}
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def new_id() -> str:
+    return uuid.uuid4().hex
+
+
+def public_user(doc: dict) -> dict:
+    return {k: v for k, v in doc.items() if k not in ("_id", "password_hash")}
+
+
+async def get_current_user(request: Request) -> dict:
+    token = request.cookies.get("access_token") or request.cookies.get("session_token")
+    if not token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth[7:]
+    if not token:
+        raise HTTPException(status_code=401, detail="Belum masuk")
+    # try JWT first
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+        if payload.get("type") == "access":
+            user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+            if user:
+                return user
+    except jwt.InvalidTokenError:
+        pass
+    # fallback: google session token
+    sess = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+    if sess:
+        expires_at = sess["expires_at"]
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at)
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at >= datetime.now(timezone.utc):
+            user = await db.users.find_one({"id": sess["user_id"]}, {"_id": 0, "password_hash": 0})
+            if user:
+                return user
+    raise HTTPException(status_code=401, detail="Sesi tidak valid atau kedaluwarsa")
+
+
+async def require_admin(user: dict = Depends(get_current_user)) -> dict:
+    if user.get("role") != "Administrator":
+        raise HTTPException(status_code=403, detail="Hanya Administrator yang diizinkan")
+    return user
+
+
+WRITE_ROLES = {"Administrator", "Supervisor", "Operator"}
+
+
+async def require_write(user: dict = Depends(get_current_user)) -> dict:
+    if user.get("role") not in WRITE_ROLES:
+        raise HTTPException(status_code=403, detail="Peran Pemantau hanya dapat melihat data")
+    return user
+
+
+# ---------- CSV seed ----------
+def parse_seed_rows(text: str) -> List[dict]:
+    rows = []
+    reader = csv.DictReader(io.StringIO(text), delimiter=';')
+    for r in reader:
+        sku = (r.get('sku') or '').strip().strip('[]')
+        name = (r.get('nama') or '').strip()
+        if not sku or not name:
+            continue
+        qty_raw = (r.get('jumlah') or '0').strip().replace('.', '').replace(',', '.')
+        try:
+            stock = int(float(qty_raw))
+        except ValueError:
+            stock = 0
+        unit = (r.get('satuan') or 'Pcs').strip()
+        try:
+            cost = float((r.get('harga_beli') or '0').strip() or 0)
+        except ValueError:
+            cost = 0
+        rows.append({
+            'name': name, 'sku': sku, 'category': (r.get('kategori') or '').strip(),
+            'stock': stock, 'damaged': 0, 'cost': cost, 'exp': '',
+            'location': (r.get('lokasi') or '').strip(), 'supplier': (r.get('supplier') or '').strip(),
+            'min': 0, 'unit': unit, 'weight': 1 if unit.lower() in ('kg', 'liter') else 0, 'secondary': '',
+        })
+    return rows
+
+
+def suppliers_from_products(products: List[dict]) -> List[dict]:
+    by_sup = {}
+    for p in products:
+        name = p.get('supplier')
+        if not name:
+            continue
+        by_sup.setdefault(name, []).append(p.get('category', ''))
+    result = []
+    for name, cats in by_sup.items():
+        top_cat = Counter([c for c in cats if c]).most_common(1)
+        result.append({
+            'id': new_id(), 'name': name, 'pic': '', 'phone': '', 'email': '', 'address': '',
+            'category': top_cat[0][0] if top_cat else '',
+        })
+    return result
+
+
+async def seed_master(force: bool = False):
+    if force:
+        await db.transactions.delete_many({})
+        await db.surat_jalan.delete_many({})
+        await db.purchase_orders.delete_many({})
+        await db.products.delete_many({})
+        await db.suppliers.delete_many({})
+    text = (ROOT_DIR / 'seed_data.csv').read_text(encoding='utf-8')
+    rows = parse_seed_rows(text)
+    if await db.products.count_documents({}) == 0:
+        for r in rows:
+            r['id'] = new_id()
+        if rows:
+            await db.products.insert_many(rows)
+    if await db.suppliers.count_documents({}) == 0:
+        sups = suppliers_from_products(rows)
+        if sups:
+            await db.suppliers.insert_many(sups)
+
+
+async def seed_admin():
+    username = os.environ.get('ADMIN_USERNAME', 'admin')
+    password = os.environ.get('ADMIN_PASSWORD', 'admin123')
+    existing = await db.users.find_one({"username": username})
+    if not existing:
+        await db.users.insert_one({
+            "id": new_id(), "name": "Administrator Gudang", "username": username,
+            "email": "admin@bulog.co.id", "role": "Administrator", "active": True,
+            "auth_provider": "local", "password_hash": hash_password(password),
+            "created_at": now_iso(),
+        })
+
+
+@app.on_event("startup")
+async def on_startup():
+    await db.users.create_index("username", unique=True)
+    await db.user_sessions.create_index("session_token")
+    await db.products.create_index("sku")
+    await db.login_attempts.create_index("identifier")
+    await seed_admin()
+    await seed_master()
+
+
+# ---------- models ----------
+class LoginBody(BaseModel):
+    username: str
+    password: str
+
+
+class SessionBody(BaseModel):
+    session_id: str
+
+
+class UserCreate(BaseModel):
+    name: str
+    username: str
+    email: str = ''
+    role: str = 'Operator'
+    password: str
+
+
+class UserUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    role: Optional[str] = None
+    active: Optional[bool] = None
+
+
+class PasswordBody(BaseModel):
+    password: str
+
+
+class ProductBody(BaseModel):
+    name: str
+    sku: str
+    category: str = ''
+    stock: float = 0
+    damaged: float = 0
+    cost: float = 0
+    exp: str = ''
+    location: str = ''
+    supplier: str = ''
+    min: float = 0
+    unit: str = 'Pcs'
+    weight: float = 0
+    secondary: str = ''
+
+
+class ProductUpdate(BaseModel):
+    name: Optional[str] = None
+    sku: Optional[str] = None
+    category: Optional[str] = None
+    stock: Optional[float] = None
+    damaged: Optional[float] = None
+    cost: Optional[float] = None
+    exp: Optional[str] = None
+    location: Optional[str] = None
+    supplier: Optional[str] = None
+    min: Optional[float] = None
+    unit: Optional[str] = None
+    weight: Optional[float] = None
+    secondary: Optional[str] = None
+
+
+class SupplierBody(BaseModel):
+    name: str
+    pic: str = ''
+    phone: str = ''
+    email: str = ''
+    address: str = ''
+    category: str = ''
+
+
+class TxnItem(BaseModel):
+    productId: str
+    qty: float = Field(gt=0)
+
+
+class TxnBody(BaseModel):
+    type: str
+    items: List[TxnItem]
+    party: str = ''
+    ref: str = ''
+    polisi: str = ''
+    kondisi: str = 'BAIK'
+    keterangan: str = ''
+
+
+class SJStatusBody(BaseModel):
+    status: str
+
+
+class POItem(BaseModel):
+    name: str
+    qty: float
+    cost: float
+
+
+class POBody(BaseModel):
+    supplier: str
+    items: List[POItem]
+    total: float
+    status: str = 'Draft'
+    date: str = ''
+
+
+# ---------- auth ----------
+MAX_LOGIN_ATTEMPTS = 5
+LOCKOUT_MINUTES = 15
+
+
+@api_router.post("/auth/login")
+async def login(body: LoginBody, request: Request, response: Response):
+    username = body.username.strip().lower()
+    identifier = username
+    attempt = await db.login_attempts.find_one({"identifier": identifier}, {"_id": 0})
+    if attempt and attempt.get("count", 0) >= MAX_LOGIN_ATTEMPTS:
+        locked_until = datetime.fromisoformat(attempt["last_attempt"]) + timedelta(minutes=LOCKOUT_MINUTES)
+        if datetime.now(timezone.utc) < locked_until:
+            raise HTTPException(status_code=429, detail=f"Terlalu banyak percobaan gagal. Coba lagi dalam {LOCKOUT_MINUTES} menit.")
+        await db.login_attempts.delete_one({"identifier": identifier})
+    user = await db.users.find_one({"username": username})
+    if not user or not user.get("password_hash") or not verify_password(body.password, user["password_hash"]):
+        await db.login_attempts.update_one(
+            {"identifier": identifier},
+            {"$inc": {"count": 1}, "$set": {"last_attempt": now_iso()}},
+            upsert=True,
+        )
+        raise HTTPException(status_code=401, detail="Username atau password salah")
+    if not user.get("active", True):
+        raise HTTPException(status_code=403, detail="Akun dinonaktifkan. Hubungi administrator.")
+    await db.login_attempts.delete_one({"identifier": identifier})
+    token = create_access_token(user["id"])
+    response.set_cookie("access_token", token, httponly=True, secure=True, samesite="none", max_age=604800, path="/")
+    return {"user": public_user(user), "token": token}
+
+
+@api_router.post("/auth/session")
+async def google_session(body: SessionBody, response: Response):
+    async with httpx.AsyncClient() as hc:
+        resp = await hc.get(
+            "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
+            headers={"X-Session-ID": body.session_id},
+        )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Session ID tidak valid")
+    data = resp.json()
+    email = data.get("email", "").lower()
+    user = await db.users.find_one({"email": email})
+    if not user:
+        user = {
+            "id": new_id(), "name": data.get("name") or email, "username": email,
+            "email": email, "role": "Pemantau", "active": True,
+            "auth_provider": "google", "picture": data.get("picture", ""),
+            "created_at": now_iso(),
+        }
+        await db.users.insert_one(dict(user))
+    if not user.get("active", True):
+        raise HTTPException(status_code=403, detail="Akun dinonaktifkan. Hubungi administrator.")
+    session_token = data["session_token"]
+    await db.user_sessions.insert_one({
+        "user_id": user["id"], "session_token": session_token,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+        "created_at": now_iso(),
+    })
+    response.set_cookie("session_token", session_token, httponly=True, secure=True, samesite="none", max_age=604800, path="/")
+    return {"user": public_user(user), "session_token": session_token}
+
+
+@api_router.get("/auth/me")
+async def me(user: dict = Depends(get_current_user)):
+    return user
+
+
+@api_router.post("/auth/logout")
+async def logout(request: Request, response: Response):
+    token = request.cookies.get("session_token")
+    if not token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth[7:]
+    if token:
+        await db.user_sessions.delete_many({"session_token": token})
+    response.delete_cookie("access_token", path="/")
+    response.delete_cookie("session_token", path="/")
+    return {"ok": True}
+
+
+# ---------- users (admin) ----------
+@api_router.get("/users")
+async def list_users(user: dict = Depends(get_current_user)):
+    return await db.users.find({}, {"_id": 0, "password_hash": 0}).sort("created_at", 1).to_list(500)
+
+
+@api_router.post("/users")
+async def create_user(body: UserCreate, admin: dict = Depends(require_admin)):
+    username = body.username.strip().lower()
+    if not username or not body.password:
+        raise HTTPException(status_code=400, detail="Username & password wajib diisi")
+    if len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="Password minimal 6 karakter")
+    if await db.users.find_one({"username": username}):
+        raise HTTPException(status_code=400, detail="Username sudah digunakan")
+    doc = {
+        "id": new_id(), "name": body.name.strip(), "username": username,
+        "email": body.email.strip(), "role": body.role, "active": True,
+        "auth_provider": "local", "password_hash": hash_password(body.password),
+        "created_at": now_iso(),
+    }
+    await db.users.insert_one(dict(doc))
+    return public_user(doc)
+
+
+@api_router.put("/users/{user_id}")
+async def update_user(user_id: str, body: UserUpdate, admin: dict = Depends(require_admin)):
+    patch = body.model_dump(exclude_unset=True, exclude_none=True)
+    target = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan")
+    if target["id"] == admin["id"] and (patch.get("role") not in (None, "Administrator") or patch.get("active") is False):
+        raise HTTPException(status_code=400, detail="Tidak dapat menurunkan/menonaktifkan akun sendiri")
+    if patch:
+        await db.users.update_one({"id": user_id}, {"$set": patch})
+    updated = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    return updated
+
+
+@api_router.put("/users/{user_id}/password")
+async def change_password(user_id: str, body: PasswordBody, user: dict = Depends(get_current_user)):
+    if user.get("role") != "Administrator" and user["id"] != user_id:
+        raise HTTPException(status_code=403, detail="Tidak diizinkan mengubah password pengguna lain")
+    if len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="Password minimal 6 karakter")
+    target = await db.users.find_one({"id": user_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan")
+    await db.users.update_one({"id": user_id}, {"$set": {"password_hash": hash_password(body.password)}})
+    return {"ok": True}
+
+
+@api_router.delete("/users/{user_id}")
+async def delete_user(user_id: str, admin: dict = Depends(require_admin)):
+    if user_id == admin["id"]:
+        raise HTTPException(status_code=400, detail="Tidak dapat menghapus akun sendiri")
+    target = await db.users.find_one({"id": user_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan")
+    if target.get("role") == "Administrator":
+        admins = await db.users.count_documents({"role": "Administrator"})
+        if admins <= 1:
+            raise HTTPException(status_code=400, detail="Minimal harus ada satu Administrator")
+    await db.users.delete_one({"id": user_id})
+    await db.user_sessions.delete_many({"user_id": user_id})
+    return {"ok": True}
+
+
+# ---------- products ----------
+@api_router.get("/products")
+async def list_products(user: dict = Depends(get_current_user)):
+    return await db.products.find({}, {"_id": 0}).sort("name", 1).to_list(2000)
+
+
+@api_router.post("/products")
+async def create_product(body: ProductBody, user: dict = Depends(require_write)):
+    doc = body.model_dump()
+    doc["id"] = new_id()
+    await db.products.insert_one(dict(doc))
+    return doc
+
+
+@api_router.put("/products/{product_id}")
+async def update_product(product_id: str, body: ProductUpdate, user: dict = Depends(require_write)):
+    patch = body.model_dump(exclude_unset=True, exclude_none=True)
+    if patch:
+        result = await db.products.update_one({"id": product_id}, {"$set": patch})
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Produk tidak ditemukan")
+    return await db.products.find_one({"id": product_id}, {"_id": 0})
+
+
+@api_router.delete("/products/{product_id}")
+async def delete_product(product_id: str, user: dict = Depends(require_write)):
+    result = await db.products.delete_one({"id": product_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Produk tidak ditemukan")
+    return {"ok": True}
+
+
+# ---------- suppliers ----------
+@api_router.get("/suppliers")
+async def list_suppliers(user: dict = Depends(get_current_user)):
+    return await db.suppliers.find({}, {"_id": 0}).sort("name", 1).to_list(1000)
+
+
+@api_router.post("/suppliers")
+async def create_supplier(body: SupplierBody, user: dict = Depends(require_write)):
+    doc = body.model_dump()
+    doc["id"] = new_id()
+    await db.suppliers.insert_one(dict(doc))
+    return doc
+
+
+@api_router.put("/suppliers/{supplier_id}")
+async def update_supplier(supplier_id: str, body: SupplierBody, user: dict = Depends(require_write)):
+    result = await db.suppliers.update_one({"id": supplier_id}, {"$set": body.model_dump()})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Supplier tidak ditemukan")
+    return await db.suppliers.find_one({"id": supplier_id}, {"_id": 0})
+
+
+@api_router.delete("/suppliers/{supplier_id}")
+async def delete_supplier(supplier_id: str, user: dict = Depends(require_write)):
+    result = await db.suppliers.delete_one({"id": supplier_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Supplier tidak ditemukan")
+    return {"ok": True}
+
+
+# ---------- transactions & surat jalan ----------
+@api_router.get("/transactions")
+async def list_transactions(user: dict = Depends(get_current_user)):
+    return await db.transactions.find({}, {"_id": 0}).sort("time", -1).to_list(2000)
+
+
+@api_router.post("/transactions")
+async def create_transaction(body: TxnBody, user: dict = Depends(require_write)):
+    if body.type not in ("MASUK", "KELUAR"):
+        raise HTTPException(status_code=400, detail="Jenis transaksi tidak valid")
+    if not body.items:
+        raise HTTPException(status_code=400, detail="Pilih minimal satu produk")
+
+    products = []
+    for it in body.items:
+        prod = await db.products.find_one({"id": it.productId}, {"_id": 0})
+        if not prod:
+            raise HTTPException(status_code=404, detail="Produk tidak ditemukan")
+        if body.type == "KELUAR" and body.kondisi == "BAIK" and it.qty > prod.get("stock", 0):
+            raise HTTPException(status_code=400, detail=f"Stok {prod['name']} tidak mencukupi (tersisa {prod.get('stock', 0)})")
+        if body.type == "KELUAR" and body.kondisi == "RUSAK" and it.qty > prod.get("damaged", 0):
+            raise HTTPException(status_code=400, detail=f"Stok rusak {prod['name']} tidak mencukupi (tersisa {prod.get('damaged', 0)})")
+        products.append(prod)
+
+    time = now_iso()
+    antrian = ""
+    sj = None
+    if body.type == "KELUAR":
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        today_count = await db.surat_jalan.count_documents({"time": {"$gte": today}})
+        antrian = f"A-{today_count + 1:03d}"
+        month_prefix = datetime.now(timezone.utc).strftime('SJ-%Y%m')
+        month_count = await db.surat_jalan.count_documents({"no": {"$regex": f"^{month_prefix}"}})
+        sj_items = []
+        total_berat = 0.0
+        total_unit = 0.0
+        for it, prod in zip(body.items, products):
+            berat = (prod.get("weight") or 0) * it.qty
+            total_berat += berat
+            total_unit += it.qty
+            sj_items.append({"name": prod["name"], "qty": it.qty, "unit": prod.get("unit", ""), "berat": berat, "sec": ""})
+        sj = {
+            "id": new_id(), "no": f"{month_prefix}-{month_count + 1:03d}", "antrian": antrian,
+            "time": time, "penerima": body.party or "-", "polisi": body.polisi, "operator": user["name"],
+            "status": "Menunggu", "ref": body.ref, "items": sj_items, "berat": total_berat, "unit": total_unit,
+        }
+        await db.surat_jalan.insert_one(dict(sj))
+
+    txns = []
+    for it, prod in zip(body.items, products):
+        delta = it.qty if body.type == "MASUK" else -it.qty
+        if body.kondisi == "RUSAK":
+            await db.products.update_one({"id": prod["id"]}, {"$inc": {"damaged": abs(delta) * (1 if body.type == "MASUK" else -1)}})
+        else:
+            await db.products.update_one({"id": prod["id"]}, {"$inc": {"stock": delta}})
+        txn = {
+            "id": new_id(), "time": time,
+            "ref": body.ref or f"{'IN' if body.type == 'MASUK' else 'OUT'}-{datetime.now(timezone.utc).strftime('%d%H%M%S')}",
+            "antrian": antrian, "type": body.type, "kondisi": body.kondisi, "product": prod["name"], "sku": prod.get("sku", ""),
+            "change": delta, "penerima": body.party or "-", "polisi": body.polisi, "operator": user["name"],
+            "keterangan": body.keterangan,
+        }
+        await db.transactions.insert_one(dict(txn))
+        txns.append(txn)
+
+    return {"transactions": txns, "suratJalan": sj}
+
+
+@api_router.get("/surat-jalan")
+async def list_surat_jalan(user: dict = Depends(get_current_user)):
+    return await db.surat_jalan.find({}, {"_id": 0}).sort("time", -1).to_list(1000)
+
+
+@api_router.put("/surat-jalan/{sj_id}/status")
+async def update_sj_status(sj_id: str, body: SJStatusBody, user: dict = Depends(require_write)):
+    result = await db.surat_jalan.update_one({"id": sj_id}, {"$set": {"status": body.status}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Surat jalan tidak ditemukan")
+    return await db.surat_jalan.find_one({"id": sj_id}, {"_id": 0})
+
+
+# ---------- purchase orders ----------
+@api_router.get("/purchase-orders")
+async def list_pos(user: dict = Depends(get_current_user)):
+    return await db.purchase_orders.find({}, {"_id": 0}).sort("date", -1).to_list(1000)
+
+
+@api_router.post("/purchase-orders")
+async def create_po(body: POBody, user: dict = Depends(require_write)):
+    year = datetime.now(timezone.utc).strftime('%Y')
+    count = await db.purchase_orders.count_documents({"no": {"$regex": f"^PO-{year}"}})
+    doc = {
+        "id": new_id(), "no": f"PO-{year}-{count + 1:03d}", "supplier": body.supplier,
+        "date": body.date or now_iso(), "status": body.status,
+        "items": [i.model_dump() for i in body.items], "total": body.total,
+    }
+    await db.purchase_orders.insert_one(dict(doc))
+    return doc
+
+
+# ---------- import & admin ----------
+@api_router.post("/import/csv")
+async def import_csv(file: UploadFile = File(...), user: dict = Depends(require_write)):
+    content = (await file.read()).decode("utf-8-sig", errors="replace")
+    rows = parse_seed_rows(content)
+    if not rows:
+        raise HTTPException(status_code=400, detail="File tidak berisi data valid. Gunakan template dengan pemisah ';'")
+    inserted, updated = 0, 0
+    for r in rows:
+        existing = await db.products.find_one({"sku": r["sku"]})
+        if existing:
+            await db.products.update_one({"sku": r["sku"]}, {"$set": {k: v for k, v in r.items() if k != "damaged"}})
+            updated += 1
+        else:
+            r["id"] = new_id()
+            await db.products.insert_one(dict(r))
+            inserted += 1
+    existing_sups = {s["name"] for s in await db.suppliers.find({}, {"_id": 0, "name": 1}).to_list(1000)}
+    for sup in suppliers_from_products(rows):
+        if sup["name"] not in existing_sups:
+            await db.suppliers.insert_one(dict(sup))
+    return {"inserted": inserted, "updated": updated}
+
+
+@api_router.post("/admin/reset-data")
+async def reset_data(admin: dict = Depends(require_admin)):
+    await seed_master(force=True)
+    return {"ok": True}
+
+
 @api_router.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {"message": "Bulog Gudang API"}
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
-    
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
-    
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
-    
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    
-    return status_checks
-
-# Include the router in the main app
 app.include_router(api_router)
 
 app.add_middleware(
@@ -77,12 +658,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
