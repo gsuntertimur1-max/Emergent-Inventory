@@ -10,8 +10,8 @@ const ROLES = ['Administrator', 'Supervisor', 'Operator', 'Pemantau'];
 const inputCls = 'w-full bg-[#0b0f17] border border-[#242f3d] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[#2563eb]';
 
 const Modal = ({ title, onClose, children }) => (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={onClose}>
-    <div className="card-surface w-full max-w-md p-6 fade-up" onClick={(e) => e.stopPropagation()}>
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 pt-20" onClick={onClose}>
+    <div className="card-surface w-full max-w-md p-6 fade-up max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
       <div className="flex items-center justify-between mb-5">
         <h2 className="font-display text-xl font-bold">{title}</h2>
         <button data-testid="modal-close-btn" onClick={onClose} className="text-[#8b93a1] hover:text-white"><X size={20} /></button>
